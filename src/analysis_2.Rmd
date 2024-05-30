@@ -1,0 +1,744 @@
+---
+title: "PD1/TIM3/LAG3 Analysis"
+header-includes: \usepackage{tabularx, longtable, graphicx, csquotes, hyperref, color}
+output:
+  html_document:
+    toc: yes
+    df_print: paged
+  pdf_document:
+    number_sections: yes
+    toc: yes
+always_allow_html: yes
+geometry: margin=.7cm
+---
+
+```{r opts, echo = FALSE}
+knitr::opts_chunk$set(
+  fig.path = "fig/"
+)
+```
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(fig.process = function(x) {
+  x2 = sub('-\\d+([.][a-z]+)$', '\\1', x)
+  if (file.rename(x, x2)) x2 else x
+})
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(1)
+
+library(knitr)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(ggrepel)
+library(cowplot)
+library(rutils)
+library(tidyr)
+library(mclust)
+library(reshape2)
+library(data.tree)
+library(networkD3)
+library(limma)
+library(edgeR)
+library(RColorBrewer)
+library(gplots)
+library(WriteXLS)
+library(xtable)
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, results='asis'}
+
+l2 = load("../../TILsGBM/data/GBM_data.rda")
+mat.GBM = countMat
+pheno.GBM = Pheno
+rm(list=l2)
+
+l1 = load("../../TILsPRAD/obj/PCA_count_fpkm_matrices_processed.rda")
+mat.PRAD = countMat
+rm(list=l1)
+l1 = load("../../TILsPRAD/obj/PCA_pheno.rda")
+pheno.PRAD = pheno
+colnames(pheno.PRAD)[7:8] = c("type", "status")
+pheno.PRAD$sample = paste(pheno.PRAD$patient, pheno.PRAD$class, sep="_")
+rm(list=l1)
+
+l3 = load("../../TILsRCC/data/Kidney_data.rda")
+mat.RCC = countMat
+pheno.RCC = Pheno
+rm(list=l3)
+
+l4 = load("../../TILsBLCA/data/Bladder_data.rda")
+mat.BLCA = countMat
+pheno.BLCA = Pheno
+rm(list=l4)
+
+mat.list = list(GBM=mat.GBM,
+                PRAD=mat.PRAD, 
+                RCC=mat.RCC,
+                BLCA=mat.BLCA)
+
+pheno.list = list(GBM=pheno.GBM,
+                  PRAD=pheno.PRAD,
+                  RCC=pheno.RCC,
+                  BLCA=pheno.BLCA)
+
+# fix PRAD sample names
+colnames(mat.list$PRAD) = pheno.list$PRAD[colnames(mat.list$PRAD), "sample"]
+
+pal.default = c("#F8766D", "#619CFF", "#00BA38", "#C77CFF")
+# red, blue, green
+# active, naive, exp
+
+load("obj/emResults.rda")
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18}
+
+LOAD_OBJ = FALSE
+
+if(LOAD_OBJ){
+  
+  load("obj/marker.groups.rda")
+  
+}else{
+
+groups.list = lapply(emResults, function(x){
+  
+  df.list = lapply(x, function(y){
+    z = y$df[, c("class", "sample", "group", "patient")]
+    rownames(z) = z$sample
+    z
+  })
+  samples = as.character(df.list$PDCD1$sample)
+  #df.all = lapply(df.list, function(y) y[samples, c("class", "group")])
+  df.all = sapply(df.list, function(y) y[samples, c("group")])
+  df.all = data.frame(sample=samples, 
+                      group=df.list[[1]][samples, "class"], 
+                      patient=df.list[[1]][samples, "patient"], 
+                      df.all)
+  colnames(df.all)[4:5] = c("PD1", "TIM3")
+  
+  df.tree = df.all
+  df.tree$PD1 = paste("PD1", ifelse(df.tree$PD1 == "HIGH", "+", "-"), sep="")
+  df.tree$LAG3 = paste("LAG3", ifelse(df.tree$LAG3 == "HIGH", "+", "-"), sep="")
+  df.tree$TIM3 = paste("TIM3", ifelse(df.tree$TIM3 == "HIGH", "+", "-"), sep="")
+  
+  df.tree.2 = df.tree
+
+  df.tree$pathString = paste("*", df.tree$PD1, df.tree$LAG3, df.tree$TIM3, sep="/")
+  df.node = as.Node(df.tree)
+  
+  #plot(df.node)
+  
+  df.tree.2$pathString = paste("*", df.tree$PD1, df.tree$LAG3, df.tree$TIM3, df.tree$group, sep="/")
+  
+  z = t(sapply(unique(df.tree.2$pathString), function(y){
+    pd = df.tree.2$PD1[which(df.tree.2$pathString == y)[1]]
+    pt = df.tree.2$patient[which(df.tree.2$pathString == y)]
+    #c(pd, paste(y, paste(pt, collapse=","), sep="/"))
+    c(pd, paste(y, "[", paste(pt, collapse=","), "]"))
+  }))
+  
+  w = t(sapply(unique(df.tree.2$pathString), function(y){
+    pd = df.tree.2$PD1[which(df.tree.2$pathString == y)[1]]
+    pt = df.tree.2$patient[which(df.tree.2$pathString == y)]
+    c(pd, paste(y, paste(pt, collapse="\n"), sep="/"))
+    #c(pd, paste(y, paste(pt, collapse=","), sep))
+  }))
+
+  w = data.frame(w)
+  colnames(w) = c("PD1", "pathString")
+  w$pathString = sapply(w$pathString, function(x) gsub("_", "\n", x))
+  w.node.low = as.Node(w[which(w$PD1 == "PD1-"),])
+  w.node.high = as.Node(w[which(w$PD1 == "PD1+"),])
+  
+  #plot(w.node.low)
+  
+  df.tree.3 = data.frame(z)
+  colnames(df.tree.3) = c("PD1", "pathString")
+  df.tree.3.list.low = ToListExplicit(as.Node(df.tree.3[which(df.tree.3$PD1 == "PD1-"), ]), 
+                                  unname = TRUE)
+  df.tree.3.list.high = ToListExplicit(as.Node(df.tree.3[which(df.tree.3$PD1 == "PD1+"), ]), 
+                                  unname = TRUE)
+  #radialNetwork(df.tree.3.list)
+  
+  list(df.all=df.all,
+       df.tree=df.tree,
+       df.tree.2=df.tree.2,
+       df.tree.3=df.tree.3,
+       df.node=df.node,
+       df.tree.3.list.low=df.tree.3.list.low,
+       df.tree.3.list.high=df.tree.3.list.high,
+       w.node.low=w.node.low,
+       w.node.high=w.node.high)
+})
+
+table.list = lapply(names(groups.list), function(x){
+
+  y = groups.list[[x]]$df.all
+  y$subgroup = paste(
+    y$group,
+    "(",
+    ifelse(y$PD1=="HIGH", "PD1+", "PD1-"), ",",
+    ifelse(y$LAG3=="HIGH", "LAG3+", "LAG3-"), ",",
+    ifelse(y$TIM3=="HIGH", "TIM3+", "TIM3-"),
+    ")",
+    sep=""
+  )
+
+  sel = grep("CD8", names(table(y$subgroup)), value=TRUE)
+
+  y = y[which(y$subgroup %in% sel), ]
+
+  sel.samples = as.character(y$sample)
+
+  mat.exp = mat.list[[x]][, sel.samples]
+
+  tables = lapply(sel, function(sel.group){
+    
+    #sel.group = "PBMC_CD8_EXP(PD1+,LAG3+,TIM3-)"
+
+    z = y[, c("sample", "patient", "subgroup")]
+    rownames(z) = as.character(z$sample)
+    z$group = factor(z$subgroup == sel.group)
+
+    mod = model.matrix(~ 0 + group, z)
+
+    con = makeContrasts(group=groupTRUE-groupFALSE, levels=mod)
+
+    dge = DGEList(counts=mat.exp, group=z$group, remove.zeros=TRUE, genes=rownames(mat.exp))
+    keep = rowSums(cpm(dge) > 1) >= 1
+    dge = dge[keep, ]
+    dge$samples$lib.size = colSums(dge$counts)
+
+    dge_n = calcNormFactors(dge)
+
+    V = voom(dge_n, mod, plot=FALSE)
+    lmfit_voom = lmFit(V, mod)
+    lmfit_con = contrasts.fit(lmfit_voom, contrasts=con)
+  
+    top_table = topTable(eBayes(lmfit_con), coef=1, number=Inf, adjust.method="bon")
+    
+    top_table = top_table[order(top_table$adj.P.Val, decreasing=FALSE), ]
+
+    top_table
+  })
+  
+  names(tables) = sel
+  
+  tables
+  
+})
+names(table.list) = names(groups.list)
+ 
+save(groups.list, table.list, file="obj/marker.groups.rda")
+ 
+}
+
+global_p_adj = function(tblist, method="BH"){
+  P = lapply(tblist, function(x) x$P.Value)
+  pv = Reduce(c, P)
+  pv.adj = p.adjust(pv, method=method)
+  j = 0
+  for(i in 1:length(tblist)){
+    a = j + 1
+    b = length(P[[i]]) + j
+    tblist[[i]]$adj.P.Val = pv.adj[a:b]
+    j = b
+  }
+  tblist
+}
+
+```
+
+\newpage
+\section{Grouping samples by PD1, TIM3 and LAG3}
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+
+# plot(1:3, 1:3, col=pal.default)
+
+# pal = brewer.pal(4, "Set2")
+pal = c("maroon", "steelblue", "cyan", "magenta")
+
+heatmat.list = lapply(groups.list, function(gl){
+
+  df = gl$df.all
+  
+  u = grep("CD8", df$group)
+  df = df[u, ]
+  rownames(df) = df$sample
+
+  df$sample = as.character(df$sample)
+
+  #ordered_groups = c("TUMOR_CD8_EXP", "PBMC_CD8_ACTIVE", "PBMC_CD8_EXP", "PBMC_CD8_NAIVE")
+  ordered_groups = c("PBMC_CD8_ACTIVE", "PBMC_CD8_NAIVE", "TUMOR_CD8_EXP", "PBMC_CD8_EXP")
+  ordered_groups = ordered_groups[ordered_groups %in% grep("CD8", levels(df$group), value=TRUE)]
+
+  u = lapply(levels(df$patient), function(y){
+  
+    Reduce(rbind, lapply(ordered_groups, function(x){  
+  
+      z = as.vector(df[which(df$group == x & df$patient == y), ])
+      sample = as.character(z["sample"])
+    
+      v = t(sapply(c("PD1", "LAG3", "TIM3"), 
+           function(w) c(sample, x, y, w, ifelse(z[w] == "HIGH", 1, 0)) ))
+      rownames(v) = paste(v[, 2], v[, 4], sep="_")
+    
+      v
+  
+    }))
+  
+  })
+  names(u) = levels(df$patient)
+
+  v = sapply(u, function(x){
+  
+    y = as.numeric(x[, 5])
+    names(y) = rownames(x)
+    y
+  
+  })
+  
+  groups = u[[1]][, 2]
+  genes = u[[1]][, 4]
+  cols = as.character(factor(groups, levels=ordered_groups, 
+                             labels=pal.default[1:length(ordered_groups)]))
+  
+  genes2 = genes
+  #genes2[which(genes == "PDCD1")] = "PD1"
+  
+  list(u=u, v=v, groups=groups, genes=genes2, 
+       cols=cols, ordered_groups=gsub("_CD8_", " ", ordered_groups))
+
+})
+
+
+```
+
+\subsection{PRAD}
+
+```{r heat_PRAD, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6, dev='png'}
+
+# par(mfrow=c(2, 2))
+
+i = 1
+h = heatmat.list[[i]]
+
+heatmap.2(h$v, 
+          xlab="patient",
+          Rowv='none',
+          trace='non',
+          dendrogram='column',
+          labRow=h$genes,
+          col=c("gray20", "orange"),
+          colsep=1:ncol(h$v),
+          rowsep=1:nrow(h$v),
+          #rowsep=seq(from=0, to=nrow(h$v), by=3),
+          sepcolor="black",
+          sepwidth=c(0.01, 0.01),
+          RowSideColors=h$cols,
+          key=FALSE,
+          margins=c(4, 5),
+          main=names(heatmat.list)[i]
+          #lhei=
+          #lmat=lmat
+)
+legend("bottomleft", legend=h$ordered_groups, fill=pal.default, cex=.7)
+
+#legend("bottomleft", legend=h$ordered_groups, fill=brewer.pal(4, "Set2"), cex=.7)
+
+```
+
+\subsection{GBM}
+
+```{r heat_GBM, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6, dev='png'}
+
+i = 2
+h = heatmat.list[[i]]
+
+heatmap.2(h$v, 
+          xlab="patient",
+          Rowv='none',
+          trace='non',
+          dendrogram='column',
+          labRow=h$genes,
+          col=c("gray20", "orange"),
+          colsep=1:ncol(h$v),
+          rowsep=1:nrow(h$v),
+          #rowsep=seq(from=0, to=nrow(h$v), by=3),
+          sepcolor="black",
+          sepwidth=c(0.01, 0.01),
+          RowSideColors=h$cols,
+          key=FALSE,
+          margins=c(4, 5),
+          main=names(heatmat.list)[i]
+          #lhei=
+          #lmat=lmat
+)
+legend("bottomleft", legend=h$ordered_groups, fill=pal.default, cex=.7)
+
+```
+
+\subsection{RCC}
+
+```{r heat_RCC, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6, dev='png'}
+
+i = 3
+h = heatmat.list[[i]]
+
+heatmap.2(h$v, 
+          xlab="patient",
+          Rowv='none',
+          trace='non',
+          dendrogram='column',
+          labRow=h$genes,
+          col=c("gray20", "orange"),
+          colsep=1:ncol(h$v),
+          rowsep=1:nrow(h$v),
+          #rowsep=seq(from=0, to=nrow(h$v), by=3),
+          sepcolor="black",
+          sepwidth=c(0.01, 0.01),
+          RowSideColors=h$cols,
+          key=FALSE,
+          margins=c(4, 5),
+          main=names(heatmat.list)[i]
+          #lhei=
+          #lmat=lmat
+)
+legend("bottomleft", legend=h$ordered_groups, fill=pal.default, cex=.7)
+
+```
+
+\subsection{BLCA}
+
+```{r heat_BLCA, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6, dev='png'}
+
+i = 4
+h = heatmat.list[[i]]
+
+heatmap.2(h$v, 
+          xlab="patient",
+          Rowv='none',
+          trace='non',
+          dendrogram='column',
+          labRow=h$genes,
+          col=c("gray20", "orange"),
+          colsep=1:ncol(h$v),
+          rowsep=1:nrow(h$v),
+          #rowsep=seq(from=0, to=nrow(h$v), by=3),
+          sepcolor="black",
+          sepwidth=c(0.01, 0.01),
+          RowSideColors=h$cols,
+          key=FALSE,
+          margins=c(4, 5),
+          main=names(heatmat.list)[i]
+          #lhei=
+          #lmat=lmat
+)
+legend("bottomleft", legend=h$ordered_groups, fill=pal.default, cex=.7)
+
+```
+
+
+\subsection{Tree-View of sample groups}
+
+\subsubsection{GBM}
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=6}
+
+x = groups.list$GBM
+
+#png("fig/tree_GBM_1.png", width=600, height=300)
+#plot(x$df.node)
+#dev.off()
+
+```
+![](fig/tree_GBM_1.png)
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
+
+plot(x$w.node.high)
+
+```
+![PD1-HIGH](fig/tree_GBM_2.png)
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=12}
+
+plot(x$w.node.low)
+
+```
+![PD1-LOW](fig/tree_GBM_3.png)
+
+\newpage
+\section{Differential Expression Analysis 1}
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+
+table.list.2 = lapply(table.list, function(x){
+  y = x[["TUMOR_CD8_EXP(PD1+,LAG3+,TIM3+)"]]
+  y
+})
+
+table.list.2 = global_p_adj(table.list.2, method="BH")
+table.list.2 = lapply(table.list.2, function(x) x[order(x$adj.P.Val), ])
+
+
+kable.list = utils.lapply_i(table.list.2, function(x, i, y){
+  temp.table = x[1:20, ]
+  rownames(temp.table) = 1:nrow(temp.table)
+  list(table=temp.table, caption=sprintf("%s TUMOR_CD8_EXP(PD1+,LAG3+,TIM3+)", y))
+})
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+
+table.list.diff1 = table.list.2
+save(table.list.diff1, file="obj/TRIPLE_POS_vs_OTHER_contrasts.rda")
+
+```
+
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+kable(kable.list$PRAD$table, caption=kable.list$PRAD$caption)
+# xtable(kable.list$PRAD$table, digits=6)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+kable(kable.list$GBM$table, caption=kable.list$GBM$caption)
+#xtable(kable.list$GBM$table, digits=6)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+kable(kable.list$RCC$table, caption=kable.list$RCC$caption)
+#xtable(kable.list$RCC$table, digits=6)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+kable(kable.list$BLCA$table, caption=kable.list$BLCA$caption)
+#xtable(kable.list$BLCA$table, digits=6)
+```
+
+```{r venn_1, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=6, results='asis', dev='png'}
+
+threshold = 0.01
+
+tlist = lapply(table.list.2, function(x) x[which(x$adj.P.Val <= threshold), ])
+tlist.genes = lapply(tlist, function(x) rownames(x))
+
+venn(tlist.genes)
+
+```
+
+Genes at the center of the venn diagram (FDR <= 0.01):
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=6, results='asis'}
+
+int.list = list()
+#int.list$A = 
+
+utils.kable_vector(sort(Reduce(intersect, tlist.genes)), 10)
+# xtable(matrix(sort(Reduce(intersect, tlist.genes)), 6))
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=8, results='asis'}
+
+WriteXLS(table.list.2, ExcelFileName="TriplePositive_CD8_TUMORvsAllOther.xls", 
+         SheetNames=names(table.list.2))
+
+```
+
+\subsection{METRNL}
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+
+tb = t(sapply(table.list.2, function(x) c(rank=which(rownames(x) == "METRNL"), round(x["METRNL", -1], 6))))
+tb = data.frame(cohort=rownames(tb), tb)
+
+kable(tb, caption="METRNL in TUMOR_CD8_EXP(PD1+,LAG3+,TIM3+) vs. other comparisons", row.names=FALSE)
+# xtable(tb, digits=6)
+
+met.list = list()
+met.list$A = tb
+
+```
+
+\newpage 
+\section{Differential Expression Analysis 2}
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=12, fig.height=10}
+
+sel1 = "TUMOR_CD8_EXP"
+sel2 = "PBMC_CD8_ACTIVE"
+
+samples.common = lapply(groups.list, function(y){
+  
+  df = y$df.all
+  sel.high = which(df$PD1 == "HIGH" & df$TIM3 == "HIGH" & df$LAG3 == "HIGH")
+  
+  z = lapply(c(sel1, sel2), 
+         function(x) sort(as.numeric(as.character(df[intersect(sel.high, which(df$group == x)), "patient"]))))
+  names(z) = c(sel1, sel2)
+  z$common = intersect(z[[1]], z[[2]])
+  
+  z
+  
+})
+
+#print(samples.common)
+
+table.list.common = lapply(1:length(groups.list), function(i){
+  
+  x = names(groups.list)[i]
+  
+  df = groups.list[[x]]$df.all
+  rownames(df) = df$sample
+  mat = mat.list[[x]]
+  
+  samples = samples.common[[x]]
+  
+  samples.ids = lapply(1:2, function(j) paste(samples$common, names(samples)[j], sep="_"))
+  
+  samples.ids.v = unlist(samples.ids)
+  
+  mat = mat[, samples.ids.v]
+  df = df[samples.ids.v, ]
+  df$group = factor(df$group, levels=c(sel2, sel1))
+  df$patient = factor(df$patient, levels=samples$common)
+  
+  mod = model.matrix(~ 0 + patient + group, df)
+  
+  colnames(mod) = gsub("group", "", colnames(mod))
+  
+  con = makeContrasts(TUMOR_CD8_EXP, levels=mod)
+
+  dge = DGEList(counts=mat, group=df$group, remove.zeros=TRUE, genes=rownames(mat))
+  keep = rowSums(cpm(dge) > 1) >= 1
+  
+  #print(table(keep))
+  
+  dge = dge[keep, ]
+  dge$samples$lib.size = colSums(dge$counts)
+
+  dge_n = calcNormFactors(dge)
+
+  V = voom(dge_n, mod, plot=FALSE)
+  lmfit_voom = lmFit(V, mod)
+  lmfit_con = contrasts.fit(lmfit_voom, contrasts=con)
+  
+  top_table = topTable(eBayes(lmfit_con), coef=1, number=Inf, adjust.method="bon")
+    
+  top_table = top_table[order(top_table$adj.P.Val, decreasing=FALSE), ]
+
+  top_table  
+})
+names(table.list.common) = names(groups.list)
+
+table.list.common = global_p_adj(table.list.common, method="BH")
+table.list.common = lapply(table.list.common, function(x) x[order(x$adj.P.Val), ])
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+
+kable.list = utils.lapply_i(table.list.common, function(x, i, y){
+  temp.table = x[1:20, ]
+  rownames(temp.table) = 1:nrow(temp.table)
+  list(table=temp.table, caption=sprintf("%s PD1+,LAG3+,TIM3+ TUMOR_CD8_EXP vs. PBMC_CD8_ACTIVE with patient", y))
+})
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+kable(kable.list$PRAD$table, caption=kable.list$PRAD$caption)
+#xtable(kable.list$PRAD$table, digits=6)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+kable(kable.list$GBM$table, caption=kable.list$GBM$caption)
+# xtable(kable.list$GBM$table, digits=6)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+kable(kable.list$RCC$table, caption=kable.list$RCC$caption)
+# xtable(kable.list$RCC$table, digits=6)
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+kable(kable.list$BLCA$table, caption=kable.list$BLCA$caption)
+# xtable(kable.list$BLCA$table, digits=6)
+```
+
+\subsection{METRNL}
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+
+tb = t(sapply(table.list.common, function(x) c(rank=which(rownames(x) == "METRNL"), round(x["METRNL", -1], 6))))
+tb = data.frame(cohort=rownames(tb), tb)
+
+kable(tb, caption="METRNL in PD1+,LAG3+,TIM3+ TUMOR_CD8_EXP vs. PBMC_CD8_ACTIVE with patient", row.names=FALSE)
+# xtable(tb, digits=6)
+
+met.list$B = tb
+
+WriteXLS(met.list, ExcelFileName="METRNL_ranks.xls", 
+         SheetNames=names(met.list))
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=8, results='asis'}
+
+WriteXLS(table.list.common, ExcelFileName="TriplePositive_CD8_TUMORvsPBMC.xls", 
+         SheetNames=names(table.list.common))
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=14, fig.height=18, results='asis'}
+
+table.list.diff2 = table.list.common
+save(table.list.diff2, file="obj/TRIPLE_POS_EXP_TUMOR_vs_ACT_PBMC_contrasts.rda")
+
+```
+
+
+\subsection{Comparing differentially expressed genes}
+
+Threshold: adjusted P Value <= 0.0001 (BH):
+
+Both up-regulated and down-regulated:
+
+```{r venn_2, echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=8, results='asis', dev='png'}
+
+threshold = 0.0001
+#threshold = 0.1
+
+tlist = lapply(table.list.common, function(x) x[which(x$adj.P.Val <= threshold), ])
+tlist.genes = lapply(tlist, function(x) rownames(x))
+
+venn(tlist.genes)
+
+"METRNL" %in% Reduce(intersect, tlist.genes)
+
+```
+
+Genes at the center of the venn diagram (FDR <= 0.0001):
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=6, results='asis'}
+
+utils.kable_vector(sort(Reduce(intersect, tlist.genes)), 10)
+# xtable(matrix(sort(Reduce(intersect, tlist.genes)), 6))
+
+```
+
